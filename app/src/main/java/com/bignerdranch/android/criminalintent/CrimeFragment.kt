@@ -6,8 +6,6 @@ import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Bundle
 import android.provider.ContactsContract
-import android.text.Editable
-import android.text.TextWatcher
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
@@ -16,16 +14,10 @@ import android.widget.CheckBox
 import android.widget.EditText
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
+import androidx.core.widget.addTextChangedListener
 import androidx.fragment.app.Fragment
-import androidx.lifecycle.lifecycleScope
-import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.*
-
-private const val ARG_CRIME_ID = "crime_id"
-private const val REQUEST_CONTACT = 1
-private const val REQUEST_READ_CONTACTS = 100
-private const val DATE_FORMAT = "EEE MMM dd HH:mm:ss zzz yyyy"
 
 class CrimeFragment : Fragment() {
 
@@ -36,27 +28,15 @@ class CrimeFragment : Fragment() {
     private lateinit var suspectButton: Button
     private lateinit var reportButton: Button
     private lateinit var callButton: Button
-    private lateinit var crimeRepository: CrimeRepository
     private var phoneNumber: String = ""
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        crimeRepository = CrimeRepository.getInstance(requireContext())
-        val crimeId: UUID = arguments?.getSerializable(ARG_CRIME_ID) as UUID? ?: UUID.randomUUID()
+        val crimeId = arguments?.getSerializable("crime_id") as UUID? ?: UUID.randomUUID()
         crime = Crime(id = crimeId)
 
-        if (arguments == null || arguments?.getSerializable(ARG_CRIME_ID) == null) {
+        if (arguments == null || arguments?.getSerializable("crime_id") == null) {
             crime.date = Date()
-        }
-
-        lifecycleScope.launch {
-            val existing = crimeRepository.getCrime(crimeId)
-            if (existing != null) {
-                crime = existing
-            } else {
-                crimeRepository.insertCrime(crime)
-            }
-            updateUI()
         }
     }
 
@@ -74,138 +54,10 @@ class CrimeFragment : Fragment() {
         reportButton = view.findViewById(R.id.crime_report)
         callButton = view.findViewById(R.id.callBtn)
 
-        val outputFormat = SimpleDateFormat("EEEE dd MMMM yyyy", Locale("ru", "RU"))
-        crimeDate.text = outputFormat.format(crime.date)
-
         crimeTitle.setText(crime.title)
         crimeSolved.isChecked = crime.isSolved
-        updateUI()
-
-        crimeTitle.addTextChangedListener(object : TextWatcher {
-            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
-            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
-            override fun afterTextChanged(s: Editable?) {
-                crime.title = s.toString()
-                lifecycleScope.launch { crimeRepository.updateCrime(crime) }
-                updateButtonStates()
-            }
-        })
-
-        crimeSolved.setOnCheckedChangeListener { _, isChecked ->
-            crime.isSolved = isChecked
-            lifecycleScope.launch { crimeRepository.updateCrime(crime) }
-            updateButtonStates()
-        }
-
-        return view
-    }
-
-    private fun updateButtonStates() {
+        crimeDate.text = SimpleDateFormat("EEEE dd MMMM yyyy", Locale("ru", "RU")).format(crime.date)
         crimeDate.isEnabled = crimeSolved.isChecked
-        reportButton.isEnabled = crimeTitle.text.toString().isNotBlank()
-        callButton.isEnabled = phoneNumber.isNotBlank() && crime.suspect.isNotBlank()
-    }
-
-    override fun onStart() {
-        super.onStart()
-
-        suspectButton.apply {
-            // Проверяем разрешение на чтение контактов
-            val pickContactIntent = Intent(Intent.ACTION_PICK, ContactsContract.Contacts.CONTENT_URI)
-            val packageManager = requireActivity().packageManager
-            val resolvedActivity = packageManager.resolveActivity(
-                pickContactIntent,
-                PackageManager.MATCH_DEFAULT_ONLY
-            )
-            isEnabled = resolvedActivity != null
-
-            setOnClickListener {
-                // Проверяем разрешение перед открытием контактов
-                if (checkContactsPermission()) {
-                    startActivityForResult(pickContactIntent, REQUEST_CONTACT)
-                }
-            }
-        }
-
-        reportButton.setOnClickListener {
-            val shareIntent = Intent(Intent.ACTION_SEND).apply {
-                type = "text/plain"
-                putExtra(Intent.EXTRA_TEXT, getCrimeReport())
-                putExtra(Intent.EXTRA_SUBJECT, getString(R.string.crime_report_subject))
-            }
-            val chooserIntent = Intent.createChooser(shareIntent, getString(R.string.send_report))
-            startActivity(chooserIntent)
-        }
-
-        callButton.setOnClickListener {
-            if (phoneNumber.isNotBlank()) {
-                val cleanNumber = phoneNumber.replace("[^0-9+]".toRegex(), "")
-                val dialIntent = Intent(Intent.ACTION_DIAL, Uri.parse("tel:$cleanNumber"))
-                startActivity(dialIntent)
-            }
-        }
-    }
-
-    // Проверяем и запрашиваем разрешение на чтение контактов
-    private fun checkContactsPermission(): Boolean {
-        return if (ContextCompat.checkSelfPermission(
-                requireContext(),
-                android.Manifest.permission.READ_CONTACTS
-            ) == PackageManager.PERMISSION_GRANTED
-        ) {
-            true
-        } else {
-            // Запрашиваем разрешение
-            ActivityCompat.requestPermissions(
-                requireActivity(),
-                arrayOf(android.Manifest.permission.READ_CONTACTS),
-                REQUEST_READ_CONTACTS
-            )
-            false
-        }
-    }
-
-    // Обработка результата запроса разрешений
-    override fun onRequestPermissionsResult(
-        requestCode: Int,
-        permissions: Array<out String>,
-        grantResults: IntArray
-    ) {
-        when (requestCode) {
-            REQUEST_READ_CONTACTS -> {
-                if (grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
-                    // Разрешение получено, можно открыть контакты
-                    val pickContactIntent = Intent(Intent.ACTION_PICK, ContactsContract.Contacts.CONTENT_URI)
-                    startActivityForResult(pickContactIntent, REQUEST_CONTACT)
-                } else {
-                    // Пользователь отказал в разрешении
-                    // Можно показать сообщение
-                }
-            }
-        }
-    }
-
-    private fun getCrimeReport(): String {
-        val solvedString = if (crime.isSolved) {
-            getString(R.string.crime_report_solved)
-        } else {
-            getString(R.string.crime_report_unsolved)
-        }
-        val dateString = SimpleDateFormat(DATE_FORMAT, Locale.getDefault()).format(crime.date)
-        val suspect = if (crime.suspect.isBlank()) {
-            getString(R.string.crime_report_no_suspect)
-        } else {
-            getString(R.string.crime_report_suspect, crime.suspect)
-        }
-        return getString(R.string.crime_report, crime.title, dateString, solvedString, suspect)
-    }
-
-    private fun updateUI() {
-        crimeTitle.setText(crime.title)
-        crimeSolved.isChecked = crime.isSolved
-
-        val outputFormat = SimpleDateFormat("EEEE dd MMMM yyyy", Locale("ru", "RU"))
-        crimeDate.text = outputFormat.format(crime.date)
 
         if (crime.suspect.isBlank()) {
             suspectButton.text = getString(R.string.crime_suspect_text)
@@ -213,79 +65,98 @@ class CrimeFragment : Fragment() {
             suspectButton.text = crime.suspect
         }
 
-        updateButtonStates()
+        reportButton.isEnabled = crimeTitle.text.toString().isNotBlank()
+        callButton.isEnabled = phoneNumber.isNotBlank() && crime.suspect.isNotBlank()
+
+        crimeTitle.addTextChangedListener {
+            crime.title = it.toString()
+            reportButton.isEnabled = it.toString().isNotBlank()
+        }
+
+        crimeSolved.setOnCheckedChangeListener { _, isChecked ->
+            crime.isSolved = isChecked
+            crimeDate.isEnabled = isChecked
+        }
+
+        suspectButton.setOnClickListener {
+            val pickContactIntent = Intent(Intent.ACTION_PICK, ContactsContract.Contacts.CONTENT_URI)
+            if (requireActivity().packageManager.resolveActivity(pickContactIntent, PackageManager.MATCH_DEFAULT_ONLY) != null) {
+                if (ContextCompat.checkSelfPermission(
+                        requireContext(),
+                        android.Manifest.permission.READ_CONTACTS
+                    ) == PackageManager.PERMISSION_GRANTED
+                ) {
+                    startActivityForResult(pickContactIntent, 1)
+                } else {
+                    ActivityCompat.requestPermissions(
+                        requireActivity(),
+                        arrayOf(android.Manifest.permission.READ_CONTACTS),
+                        100
+                    )
+                }
+            }
+        }
+
+        reportButton.setOnClickListener {
+            val solvedString = if (crime.isSolved) getString(R.string.crime_report_solved) else getString(R.string.crime_report_unsolved)
+            val suspect = if (crime.suspect.isBlank()) getString(R.string.crime_report_no_suspect) else getString(R.string.crime_report_suspect, crime.suspect)
+
+            // Используем русский формат даты
+            val russianDate = SimpleDateFormat("EEE, MMM dd", Locale("ru", "RU")).format(crime.date)
+            val report = getString(R.string.crime_report, crime.title, russianDate, solvedString, suspect)
+
+            Intent(Intent.ACTION_SEND).apply {
+                type = "text/plain"
+                putExtra(Intent.EXTRA_TEXT, report)
+                putExtra(Intent.EXTRA_SUBJECT, getString(R.string.crime_report_subject))
+            }.also { startActivity(Intent.createChooser(it, getString(R.string.send_report))) }
+        }
+
+        callButton.setOnClickListener {
+            if (phoneNumber.isNotBlank()) {
+                startActivity(Intent(Intent.ACTION_DIAL, Uri.parse("tel:${phoneNumber.replace("[^0-9+]".toRegex(), "")}")))
+            }
+        }
+
+        return view
+    }
+
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+        if (requestCode == 100 && grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+            startActivityForResult(Intent(Intent.ACTION_PICK, ContactsContract.Contacts.CONTENT_URI), 1)
+        }
     }
 
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
-        if (resultCode != Activity.RESULT_OK || data == null) return
+        if (requestCode == 1 && resultCode == Activity.RESULT_OK && data != null) {
+            data.data?.let { uri ->
+                requireActivity().contentResolver.query(uri, arrayOf(ContactsContract.Contacts.DISPLAY_NAME, ContactsContract.Contacts._ID), null, null, null)?.use { cursor ->
+                    if (cursor.moveToFirst()) {
+                        crime.suspect = cursor.getString(cursor.getColumnIndexOrThrow(ContactsContract.Contacts.DISPLAY_NAME))
+                        suspectButton.text = crime.suspect
 
-        if (requestCode == REQUEST_CONTACT) {
-            val contactUri: Uri? = data.data
-            val queryFields = arrayOf(
-                ContactsContract.Contacts.DISPLAY_NAME,
-                ContactsContract.Contacts._ID
-            )
-
-            val cursor = requireActivity().contentResolver.query(
-                contactUri!!,
-                queryFields,
-                null,
-                null,
-                null
-            )
-            cursor?.use {
-                if (it.moveToFirst()) {
-                    val suspectName = it.getString(it.getColumnIndexOrThrow(ContactsContract.Contacts.DISPLAY_NAME))
-                    val contactId = it.getString(it.getColumnIndexOrThrow(ContactsContract.Contacts._ID))
-
-                    getPhoneNumberFromContact(contactId)
-
-                    crime.suspect = suspectName
-                    lifecycleScope.launch {
-                        crimeRepository.updateCrime(crime)
-                        updateUI()
+                        val contactId = cursor.getString(cursor.getColumnIndexOrThrow(ContactsContract.Contacts._ID))
+                        if (ContextCompat.checkSelfPermission(requireContext(), android.Manifest.permission.READ_CONTACTS) == PackageManager.PERMISSION_GRANTED) {
+                            requireActivity().contentResolver.query(
+                                ContactsContract.CommonDataKinds.Phone.CONTENT_URI,
+                                arrayOf(ContactsContract.CommonDataKinds.Phone.NUMBER),
+                                "${ContactsContract.CommonDataKinds.Phone.CONTACT_ID} = ?",
+                                arrayOf(contactId),
+                                null
+                            )?.use { phoneCursor ->
+                                phoneNumber = if (phoneCursor.moveToFirst()) phoneCursor.getString(phoneCursor.getColumnIndexOrThrow(ContactsContract.CommonDataKinds.Phone.NUMBER)) ?: "" else ""
+                                callButton.isEnabled = phoneNumber.isNotBlank() && crime.suspect.isNotBlank()
+                            }
+                        }
                     }
                 }
             }
         }
     }
 
-    private fun getPhoneNumberFromContact(contactId: String) {
-        // Для получения номера тоже нужно разрешение READ_CONTACTS
-        if (ContextCompat.checkSelfPermission(
-                requireContext(),
-                android.Manifest.permission.READ_CONTACTS
-            ) != PackageManager.PERMISSION_GRANTED
-        ) {
-            phoneNumber = ""
-            return
-        }
-
-        val phoneCursor = requireActivity().contentResolver.query(
-            ContactsContract.CommonDataKinds.Phone.CONTENT_URI,
-            arrayOf(ContactsContract.CommonDataKinds.Phone.NUMBER),
-            "${ContactsContract.CommonDataKinds.Phone.CONTACT_ID} = ?",
-            arrayOf(contactId),
-            null
-        )
-
-        phoneCursor?.use {
-            if (it.moveToFirst()) {
-                phoneNumber = it.getString(it.getColumnIndexOrThrow(ContactsContract.CommonDataKinds.Phone.NUMBER)) ?: ""
-            } else {
-                phoneNumber = ""
-            }
-        }
-
-        updateButtonStates()
-    }
-
     companion object {
-        fun newInstance(crimeId: UUID): CrimeFragment {
-            val args = Bundle().apply {
-                putSerializable(ARG_CRIME_ID, crimeId)
-            }
-            return CrimeFragment().apply { arguments = args }
+        fun newInstance(crimeId: UUID) = CrimeFragment().apply {
+            arguments = Bundle().apply { putSerializable("crime_id", crimeId) }
         }
     }
 }

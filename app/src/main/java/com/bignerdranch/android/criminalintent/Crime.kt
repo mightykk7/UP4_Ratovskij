@@ -1,6 +1,5 @@
 package com.bignerdranch.android.criminalintent
 
-import java.util.Date
 import androidx.room.Entity
 import androidx.room.PrimaryKey
 import java.util.*
